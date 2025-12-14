@@ -2,7 +2,7 @@ import express from "express";
 import { generateVideoViaGeminiBrowserService } from "../services/gemini.browser.service.js";
 import { generateVideoViaQwenBrowserBatchService } from "../services/qwen.browser.service.js";
 import { generateVideoViaGoogleFlowBatchService } from "../services/google.browser.service.js";
-
+import { generateGrokImagineVideosService } from "../services/grok.browser.service.js";
 const router = express.Router();
 
 // Gemini
@@ -80,6 +80,35 @@ router.post("/generate-google-flow-batch", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Google Flow batch error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/generate-grok-imagine-batch", async (req, res) => {
+  try {
+    const { prompt, accounts } = req.body;
+
+    if (!prompt || typeof prompt !== "string") {
+      return res.status(400).json({ error: "prompt is required" });
+    }
+
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+      return res.status(400).json({
+        error: "accounts must be a non-empty array",
+      });
+    }
+
+    const result = await generateGrokImagineVideosService({
+      prompt,
+      accounts,
+    });
+
+    res.json({
+      provider: "grok-imagine",
+      ...result,
+    });
+  } catch (err) {
+    console.error("❌ Grok Imagine error:", err);
     res.status(500).json({ error: err.message });
   }
 });
