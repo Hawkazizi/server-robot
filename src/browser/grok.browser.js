@@ -49,7 +49,7 @@ async function ensureLoggedIn(page, account) {
 
   await page.goto(GROK_IMAGINE_URL, {
     waitUntil: "domcontentloaded",
-    timeout: 30000,
+    timeout: 40000,
   });
 
   // Fast path
@@ -67,7 +67,7 @@ async function ensureLoggedIn(page, account) {
   await Promise.race([
     // 1️⃣ Imagine prompt is available (BEST SIGNAL)
     page.waitForSelector("textarea, [contenteditable='true']", {
-      timeout: 200000,
+      timeout: 250000,
     }),
 
     // 2️⃣ Logout / avatar appears
@@ -77,7 +77,7 @@ async function ensureLoggedIn(page, account) {
           /sign\s*out/i.test(el.textContent || ""),
         );
       },
-      { timeout: 20000 },
+      { timeout: 30000 },
     ),
   ]);
 
@@ -147,18 +147,18 @@ async function login(page, email, password) {
   const loginWithEmailBtn = page.locator("button", {
     hasText: "Login with email",
   });
-  await loginWithEmailBtn.waitFor({ timeout: 15000 });
+  await loginWithEmailBtn.waitFor({ timeout: 18000 });
   await loginWithEmailBtn.click();
 
   // Email
   const emailInput = page.locator('input[name="email"]');
-  await emailInput.waitFor({ timeout: 15000 });
+  await emailInput.waitFor({ timeout: 18000 });
   await emailInput.fill(email);
   await page.locator("button", { hasText: "Next" }).click();
 
   // Password
   const passwordInput = page.locator('input[name="password"]');
-  await passwordInput.waitFor({ timeout: 15000 });
+  await passwordInput.waitFor({ timeout: 18000 });
   await passwordInput.fill(password);
 
   console.log("🛑 Waiting for Cloudflare Turnstile (solve manually)");
@@ -205,7 +205,7 @@ async function submitPrompt(page, prompt) {
   await editable.type(prompt, { delay: 15 });
 
   // Wait a short moment to let React update state
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(600);
 
   // Press Enter to submit
   await editable.press("Enter");
@@ -243,7 +243,7 @@ async function isRateLimited(page) {
 /* WAIT FOR IMAGES */
 /* ---------------------------------- */
 
-async function waitForImages(page, minCount = 16) {
+async function waitForImages(page, minCount = 36) {
   console.log("⏳ Waiting for generated images...");
 
   await page.waitForFunction(
@@ -367,7 +367,7 @@ async function logout(page) {
     const profileBtn = page.locator('button[aria-haspopup="menu"]');
     if (await profileBtn.count()) {
       await profileBtn.first().click();
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(700);
     }
 
     // Click Sign Out
@@ -384,7 +384,7 @@ async function logout(page) {
   }
 
   // 🔑 IMPORTANT: wait for backend session invalidation
-  console.log("⏳ Waiting 5s for session cleanup...");
+  console.log("⏳ Waiting 10s for session cleanup...");
   await page.waitForTimeout(10000);
 
   console.log("🚪 Logout completed");
@@ -396,7 +396,7 @@ async function logout(page) {
 export async function generateGrokImagineVideos({
   prompt,
   account,
-  imageCount = 16,
+  imageCount = 36,
 }) {
   if (!prompt || typeof prompt !== "string") {
     throw new Error("Prompt must be a non-empty string");
