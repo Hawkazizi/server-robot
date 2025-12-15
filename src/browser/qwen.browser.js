@@ -55,6 +55,42 @@ async function logout(page) {
   console.log("✅ Logged out successfully");
 }
 
+async function downloadQwenVideoFromDOM(page, prompt) {
+  console.log("⬇️ Downloading video from DOM <video> tag");
+
+  const videoUrl = await page.evaluate(() => {
+    const video = document.querySelector("video");
+    if (!video) return null;
+
+    return video.currentSrc || video.querySelector("source")?.src || null;
+  });
+
+  if (!videoUrl) {
+    throw new Error("Video URL not found in DOM");
+  }
+
+  const response = await page.request.get(videoUrl);
+  if (!response.ok()) {
+    throw new Error(`Failed to fetch video: ${response.status()}`);
+  }
+
+  const buffer = await response.body();
+  if (buffer.length < 500_000) {
+    throw new Error("Downloaded video is too small");
+  }
+
+  const safePrompt = prompt
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gi, "_")
+    .slice(0, 60);
+
+  const filePath = `${DOWNLOAD_DIR}/${safePrompt}.mp4`;
+  fs.writeFileSync(filePath, buffer);
+
+  console.log(`💾 Saved video → ${filePath}`);
+  return { filePath, videoUrl };
+}
+
 /* ---------------------------------- */
 /* ✅ ERROR DETECTION */
 /* ---------------------------------- */
@@ -289,8 +325,6 @@ export async function generateVideoViaQwenBrowserBatch({ prompts, accounts }) {
       await ensureVideoMode(page);
     }
 
-    const downloadPromise = waitAndSaveVideoFromNetwork(page);
-
     await page.fill("textarea", "");
     await page.keyboard.type(prompts[i], { delay: 25 });
     await page.keyboard.press("Enter");
@@ -334,19 +368,17 @@ export async function generateVideoViaQwenBrowserBatch({ prompts, accounts }) {
       await ensureVideoMode(page);
       continue;
     }
-    await clickLastVideoMenuAndDownload(page);
-    const downloadedPath = await downloadPromise;
 
-    const videoUrl = await page.evaluate(() => {
-      const v = document.querySelector("video");
-      return v ? v.currentSrc || v.src : null;
-    });
+    const { filePath, videoUrl } = await downloadQwenVideoFromDOM(
+      page,
+      prompts[i],
+    );
 
     results.push({
       index: i,
       prompt: prompts[i],
       videoUrl,
-      downloadedPath,
+      downloadedPath: filePath,
     });
 
     i++;

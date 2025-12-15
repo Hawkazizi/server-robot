@@ -282,6 +282,9 @@ export async function generateGrokImagineVideos({
   account,
   imageCount = 16,
 }) {
+  if (!prompt || typeof prompt !== "string") {
+    throw new Error("Prompt must be a non-empty string");
+  }
   const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
     headless: false,
     executablePath: "/usr/bin/google-chrome-stable",

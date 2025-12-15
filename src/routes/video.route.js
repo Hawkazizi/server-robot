@@ -86,30 +86,33 @@ router.post("/generate-google-flow-batch", async (req, res) => {
 
 router.post("/generate-grok-imagine-batch", async (req, res) => {
   try {
-    const { prompt, accounts } = req.body;
+    const { prompts, accounts } = req.body;
 
-    if (!prompt || typeof prompt !== "string") {
-      return res.status(400).json({ error: "prompt is required" });
+    if (!Array.isArray(prompts) || prompts.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "prompts must be a non-empty array" });
     }
 
     if (!Array.isArray(accounts) || accounts.length === 0) {
-      return res.status(400).json({
-        error: "accounts must be a non-empty array",
-      });
+      return res
+        .status(400)
+        .json({ error: "accounts must be a non-empty array" });
     }
 
     const result = await generateGrokImagineVideosService({
-      prompt,
+      prompts,
       accounts,
     });
 
     res.json({
       provider: "grok-imagine",
-      ...result,
+      results: result,
     });
   } catch (err) {
     console.error("❌ Grok Imagine error:", err);
     res.status(500).json({ error: err.message });
   }
 });
+
 export default router;
