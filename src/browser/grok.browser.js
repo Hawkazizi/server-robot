@@ -20,114 +20,165 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /* ---------------------------------- */
 /* AUTH HELPERS */
 /* ---------------------------------- */
+async function safeCloseContext(context) {
+  try {
+    await context.close();
+  } catch {}
+  await new Promise((r) => setTimeout(r, 3000));
+}
 
 async function isLoggedIn(page) {
   return page.evaluate(() => {
-    const logoutButton = document.querySelector(
-      "button[aria-label='Log out'], a[href*='logout'], a[href*='sign-out']",
+    const logoutButton = Array.from(
+      document.querySelectorAll("div[role='menuitem'], button"),
+    ).some((el) => /sign\s*out/i.test(el.textContent || ""));
+
+    const userAvatar = document.querySelector(
+      "button img, img[alt*='profile'], img[alt*='user']",
     );
 
-    const userProfile = document.querySelector(
-      "[data-testid='user-profile'], .user-profile, [aria-label*='profile']",
+    const signInButton = Array.from(document.querySelectorAll("button")).some(
+      (b) => /sign\s*in/i.test(b.textContent || ""),
     );
 
-    const requiresAuth =
-      window.location.pathname.includes("/imagine") ||
-      window.location.pathname.includes("/account");
-
-    return !!(logoutButton || (userProfile && requiresAuth));
+    return Boolean((logoutButton || userAvatar) && !signInButton);
   });
 }
 async function ensureLoggedIn(page, account) {
   console.log("🔍 Checking login status...");
 
-  // First check if already logged in
+  await page.goto(GROK_IMAGINE_URL, {
+    waitUntil: "domcontentloaded",
+    timeout: 30000,
+  });
+
+  // Fast path
   if (await isLoggedIn(page)) {
-    console.log("✅ Already logged in - skipping login");
+    console.log("✅ Already logged in");
     return true;
   }
 
   console.log("❌ Not logged in - proceeding with login");
+  await login(page, account.email, account.password);
 
-  try {
-    // Go directly to imagine URL
-    await page.goto(GROK_IMAGINE_URL, {
-      waitUntil: "networkidle",
-      timeout: 30000,
-    });
+  console.log("⏳ Verifying login state...");
 
-    // CHANGE: Check for the specific "Sign in" button
-    const signInButton = page.locator(
-      'button[data-slot="button"][type="button"]:has-text("Sign in")',
+  // WAIT for ANY valid logged-in signal
+  await Promise.race([
+    // 1️⃣ Imagine prompt is available (BEST SIGNAL)
+    page.waitForSelector("textarea, [contenteditable='true']", {
+      timeout: 200000,
+    }),
+
+    // 2️⃣ Logout / avatar appears
+    page.waitForFunction(
+      () => {
+        return Array.from(document.querySelectorAll("button, div")).some((el) =>
+          /sign\s*out/i.test(el.textContent || ""),
+        );
+      },
+      { timeout: 20000 },
+    ),
+  ]);
+
+  // FINAL sanity check: Sign in should be gone
+  const stillSignedOut = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll("button")).some((b) =>
+      /sign\s*in/i.test(b.textContent || ""),
     );
-    if (await signInButton.count()) {
-      console.log("➡ Found Sign in button - proceeding with login");
-      await login(page, account.email, account.password);
-    }
+  });
 
-    // Verify login was successful
-    await page.waitForTimeout(2000);
-    console.log("✅ Login verified");
-    return true;
-  } catch (error) {
-    console.error("🚨 Login process failed:", error.message);
-    throw error;
+  if (stillSignedOut) {
+    throw new Error("LOGIN_FAILED");
   }
+
+  console.log("✅ Login verified");
+  return true;
 }
+
+async function ensureImageModelSelected(page) {
+  const modelButton = page
+    .locator('button#model-select-trigger[aria-label="Model select"]')
+    .first();
+
+  await modelButton.waitFor({ state: "visible" });
+
+  const expanded = await modelButton.getAttribute("aria-expanded");
+
+  if (expanded !== "true") {
+    await modelButton.click();
+  }
+
+  // Wait for Radix menu container
+  const menu = page.locator('div[role="menu"][data-state="open"]');
+  await menu.waitFor({ state: "visible" });
+
+  // ✅ TARGET THE MENUITEM ITSELF (NOT THE SPAN)
+  const imageMenuItem = menu.locator('div[role="menuitem"]', {
+    has: page.getByText("Image", { exact: true }),
+  });
+
+  await imageMenuItem.first().click();
+
+  // Wait until dropdown closes
+  await page.waitForFunction(() => {
+    const btn = document.querySelector("#model-select-trigger");
+    return btn && btn.getAttribute("aria-expanded") === "false";
+  });
+
+  console.log("🖼️ Image model selected");
+}
+
 /* ---------------------------------- */
 /* LOGIN FLOW (EXACT AS DESCRIBED) */
 /* ---------------------------------- */
 async function login(page, email, password) {
   console.log(`🔐 Logging in as ${email}`);
 
-  /* ---- Click Sign in button ---- */
-  // CHANGE: Use text-based selector to specifically target the "Sign in" button
   const signInButton = page.locator(
     'button[data-slot="button"][type="button"]:has-text("Sign in")',
   );
-  await signInButton.waitFor({ timeout: 0 });
-  await signInButton.click();
 
-  /* ---- Login with email ---- */
+  if (await signInButton.count()) {
+    await signInButton.first().click();
+  }
+
+  // Login with email
   const loginWithEmailBtn = page.locator("button", {
     hasText: "Login with email",
   });
-
-  await loginWithEmailBtn.waitFor({ timeout: 0 });
+  await loginWithEmailBtn.waitFor({ timeout: 15000 });
   await loginWithEmailBtn.click();
 
-  /* ---- Email step ---- */
+  // Email
   const emailInput = page.locator('input[name="email"]');
-  await emailInput.waitFor({ timeout: 0 });
+  await emailInput.waitFor({ timeout: 15000 });
   await emailInput.fill(email);
-
   await page.locator("button", { hasText: "Next" }).click();
 
-  /* ---- Password step ---- */
+  // Password
   const passwordInput = page.locator('input[name="password"]');
-  await passwordInput.waitFor({ timeout: 0 });
+  await passwordInput.waitFor({ timeout: 15000 });
   await passwordInput.fill(password);
 
   console.log("🛑 Waiting for Cloudflare Turnstile (solve manually)");
 
-  /* ---- WAIT FOR CLOUDFLARE TURNSTILE TO DISAPPEAR ---- */
   await page.waitForFunction(
-    () => {
-      const iframe = document.querySelector(
-        'iframe[src*="challenges.cloudflare.com"]',
-      );
-      return !iframe;
-    },
-    { timeout: 0 },
+    () => !document.querySelector('iframe[src*="challenges.cloudflare.com"]'),
+    { timeout: 5 * 60 * 1000 },
   );
 
   console.log("✅ CAPTCHA solved");
 
-  /* ---- Login ---- */
-  await page.locator("button", { hasText: "Login" }).click();
+  // 🔥 FIXED: submit button (NOT OAuth logins)
+  const submitLoginBtn = page.locator(
+    'form button[type="submit"], form button:has-text("Login")',
+  );
+  await submitLoginBtn.first().click();
 
-  console.log("✅ Login successful");
+  console.log("✅ Login submitted");
 }
+
 /* ---------------------------------- */
 /* submit prompt */
 /* ---------------------------------- */
@@ -197,8 +248,19 @@ async function waitForImages(page, minCount = 16) {
 
   await page.waitForFunction(
     (count) => {
+      // Check images
       const imgs = document.querySelectorAll("img[alt='Generated image']");
-      return imgs.length >= count;
+      if (imgs.length >= count) return true;
+
+      // Also check rate limit toast
+      const rateToast = document.querySelector(
+        "li[data-type='error'] .flex.items-center.font-semibold",
+      );
+      if (rateToast?.textContent.includes("Rate limit reached")) {
+        return "RATE_LIMIT_REACHED";
+      }
+
+      return false;
     },
     minCount,
     { timeout: 0 },
@@ -235,20 +297,42 @@ function sanitizePrompt(prompt, maxLength = 60) {
     .replace(/^_+|_+$/g, "") // trim underscores
     .slice(0, maxLength); // limit length
 }
-
 async function captureAllVideos(page, expectedCount, prompt, timeout = 120000) {
   console.log("⬇️ Capturing generated videos");
 
   const collected = new Set();
 
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve([...collected]), timeout);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      page.off("response", handler);
+      resolve([...collected]);
+    }, timeout);
 
     const handler = async (response) => {
       try {
+        // --- RATE LIMIT DETECTION ---
+        const rateToast = await page.$(
+          "li[data-type='error'] .flex.items-center.font-semibold",
+        );
+        if (rateToast) {
+          const text = await rateToast.textContent();
+          if (text.includes("Rate limit reached")) {
+            console.log("🚨 Rate limit detected during video capture!");
+
+            page.off("response", handler); // ⛔ stop handler immediately
+            clearTimeout(timer);
+
+            await logout(page);
+            await safeCloseContext(page.context());
+
+            reject(new Error("RATE_LIMIT_REACHED"));
+            return;
+          }
+        }
+
+        // --- VIDEO CAPTURE ---
         const url = response.url();
         if (!url.includes(".mp4")) return;
-
         if (collected.has(url)) return;
 
         const buffer = await response.body();
@@ -267,11 +351,43 @@ async function captureAllVideos(page, expectedCount, prompt, timeout = 120000) {
           page.off("response", handler);
           resolve([...collected]);
         }
-      } catch {}
+      } catch (err) {
+        console.error("⚠️ Error in captureAllVideos handler:", err);
+      }
     };
 
     page.on("response", handler);
   });
+}
+async function logout(page) {
+  console.log("🚪 Logging out...");
+
+  try {
+    // Open profile menu
+    const profileBtn = page.locator('button[aria-haspopup="menu"]');
+    if (await profileBtn.count()) {
+      await profileBtn.first().click();
+      await page.waitForTimeout(300);
+    }
+
+    // Click Sign Out
+    const signOutItem = page.locator('div[role="menuitem"]', {
+      hasText: "Sign Out",
+    });
+
+    if (await signOutItem.count()) {
+      await signOutItem.first().click();
+      console.log("✅ Sign Out clicked");
+    }
+  } catch (err) {
+    console.log("⚠️ Logout UI not available, skipping:", err.message);
+  }
+
+  // 🔑 IMPORTANT: wait for backend session invalidation
+  console.log("⏳ Waiting 5s for session cleanup...");
+  await page.waitForTimeout(10000);
+
+  console.log("🚪 Logout completed");
 }
 
 /* ---------------------------------- */
@@ -299,19 +415,28 @@ export async function generateGrokImagineVideos({
   /* ENSURE LOGGED IN */
   await ensureLoggedIn(page, account);
 
-  /* PROMPT */
+  await ensureImageModelSelected(page);
+  /* Inside generateGrokImagineVideos */
   await submitPrompt(page, prompt);
 
-  /* CHECK FOR RATE LIMIT ERROR */
+  /* CHECK FOR RATE LIMIT */
   if (await isRateLimited(page)) {
-    console.log("🚨 Rate limit detected! Logging out and trying next account");
+    console.log("🚨 Rate limit detected! Logging out...");
     await logout(page);
-    await context.close();
+    await safeCloseContext(page.context());
     throw new Error("RATE_LIMIT_REACHED");
   }
 
   /* WAIT */
-  await waitForImages(page, imageCount);
+  const imageStatus = await waitForImages(page, imageCount);
+
+  if (imageStatus === "RATE_LIMIT_REACHED") {
+    console.log("🚨 Rate limit reached — logging out & rotating account");
+    await logout(page);
+    await safeCloseContext(page.context());
+
+    throw new Error("RATE_LIMIT_REACHED");
+  }
 
   /* VIDEO */
   await clickMakeVideoOnAllImages(page);
@@ -319,7 +444,7 @@ export async function generateGrokImagineVideos({
   /* DOWNLOAD */
   const videos = await captureAllVideos(page, imageCount, prompt);
 
-  await context.close();
+  await safeCloseContext(page.context());
 
   return {
     prompt,
