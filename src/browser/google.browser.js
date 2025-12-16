@@ -23,6 +23,123 @@ async function resetToHome(page) {
 /* ✅ AUTH HELPERS (for Google sign-in) */
 /* ---------------------------------- */
 
+async function waitForLoginIfNeeded(page) {
+  // If "Sign in" exists, user is not logged in (most reliable for this simplified flow)
+  const signInBtn = page.locator("button:has-text('Sign in')");
+  if (await signInBtn.count()) {
+    console.log(
+      "🛑 Not logged in. Waiting for authorization (login manually)...",
+    );
+    // Wait until Sign in disappears OR download/player UI appears
+    await page.waitForFunction(
+      () => {
+        const hasSignIn = Array.from(document.querySelectorAll("button")).some(
+          (b) => /sign\s*in/i.test(b.textContent || ""),
+        );
+        if (!hasSignIn) return true;
+
+        // alternative: user avatar exists
+        const hasAvatar =
+          document.querySelector("button img") ||
+          document.querySelector("img[alt*='Account']") ||
+          document.querySelector("button[aria-label*='Account']");
+        return Boolean(hasAvatar);
+      },
+      { timeout: 0 },
+    );
+
+    console.log("✅ Authorization detected. Starting prompts...");
+  } else {
+    console.log("✅ Already logged in.");
+  }
+}
+
+/// download helper
+
+async function downloadVideoFromSrc(page, videoSrc, DOWNLOAD_DIR, index) {
+  console.log("⬇️ Downloading video via src...");
+
+  const buffer = await page.evaluate(async (url) => {
+    const res = await fetch(url);
+    const arrayBuffer = await res.arrayBuffer();
+    return Array.from(new Uint8Array(arrayBuffer));
+  }, videoSrc);
+
+  const filePath = `${DOWNLOAD_DIR}/${index}-${Date.now()}.mp4`;
+  fs.writeFileSync(filePath, Buffer.from(buffer));
+
+  console.log("✅ Video saved:", filePath);
+  return filePath;
+}
+
+async function waitUntilVideoCompleted(page) {
+  console.log("⏳ Waiting for NEW video src to appear (no timeout)...");
+
+  // Capture existing srcs before generation
+  const existingSrcs = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("video"))
+      .map((v) => v.src)
+      .filter(Boolean),
+  );
+
+  while (true) {
+    const src = await page.evaluate(() => {
+      const videos = Array.from(document.querySelectorAll("video"));
+      const last = videos[videos.length - 1];
+      return last?.src || null;
+    });
+
+    if (src && src.startsWith("https://") && !existingSrcs.includes(src)) {
+      console.log("✅ New video src detected.");
+      return src;
+    }
+
+    await page.waitForTimeout(1000);
+  }
+}
+
+async function downloadCompletedVideo(page, DOWNLOAD_DIR, index) {
+  console.log("⬇️ Downloading completed video...");
+
+  // Hover the player area (so the navbar appears)
+  // Use a stable anchor: the player container often contains the play icon.
+  const playerArea = page
+    .locator("i.google-symbols:has-text('play_arrow')")
+    .first();
+  if (await playerArea.count()) {
+    await playerArea.hover({ force: true });
+    await page.waitForTimeout(400);
+  } else {
+    // fallback hover anywhere on video
+    const video = page.locator("video").last();
+    if (await video.count()) {
+      await video.hover({ force: true });
+      await page.waitForTimeout(400);
+    }
+  }
+
+  // The actual download button (icon text = download)
+  const downloadBtn = page
+    .locator("button", {
+      has: page.locator("i.google-symbols:has-text('download')"),
+    })
+    .first();
+
+  await downloadBtn.waitFor({ state: "visible", timeout: 60000 });
+
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 120000 }),
+    downloadBtn.click(),
+  ]);
+
+  const filename = download.suggestedFilename() || `flow-${Date.now()}.mp4`;
+  const filePath = `${DOWNLOAD_DIR}/${index}-${Date.now()}-${filename}`;
+  await download.saveAs(filePath);
+
+  console.log("✅ Download saved:", filePath);
+  return filePath;
+}
+
 async function isLoggedIn(page) {
   // Heuristic: Flow's top-right shows a profile avatar or an account button.
   // If a "Sign in" button exists, we are not logged in.
@@ -215,286 +332,80 @@ async function waitAndSaveVideoFromNetwork(
 /* ---------------------------------- */
 /* ✅ MAIN BATCH FUNCTION (updated) */
 /* ---------------------------------- */
-
-export async function generateVideoViaGoogleFlowBatch({
-  prompts,
-  accounts = [],
-}) {
-  if (!Array.isArray(prompts) || prompts.length === 0) {
-    throw new Error("prompts must be a non-empty array");
-  }
-
-  if (!Array.isArray(accounts)) {
-    throw new Error("accounts must be an array (can be empty)");
-  }
-
-  const results = [];
-  let accountIndex = 0;
-
+export async function generateVideoViaGoogleFlowBatch({ prompts }) {
   const DOWNLOAD_DIR = "/home/hawk/flow-videos";
-  if (!fs.existsSync(DOWNLOAD_DIR)) {
+  if (!fs.existsSync(DOWNLOAD_DIR))
     fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
-  }
 
   const context = await chromium.launchPersistentContext(USER_DATA_DIR_FLOW, {
     headless: false,
     executablePath: "/usr/bin/google-chrome-stable",
-    slowMo: 40,
     viewport: { width: 1280, height: 800 },
     acceptDownloads: true,
-    args: [
-      "--disable-blink-features=AutomationControlled",
-      "--no-sandbox",
-      "--disable-dev-shm-usage",
-    ],
+    args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"],
   });
 
   const page = await context.newPage();
-  page.setDefaultTimeout(60000);
+  page.setDefaultTimeout(600000);
 
   console.log("🌐 Opening Google Flow...");
-  await resetToHome(page);
+  await page.goto(FLOW_URL, { waitUntil: "domcontentloaded" });
 
-  // If accounts provided, ensure logged in as first account
-  if (accounts.length > 0) {
-    if (!(await isLoggedIn(page))) {
-      try {
-        await loginWithPopup(
-          context,
-          page,
-          accounts[accountIndex].email,
-          accounts[accountIndex].password,
-        );
-        // Wait & ensure Flow shows signed-in state
-        await sleep(3000);
-        if (!(await isLoggedIn(page))) {
-          console.warn(
-            "⚠️ Still not recognized as logged in after login attempt.",
-          );
-        } else {
-          console.log("✅ Logged into Google Flow.");
-        }
-      } catch (err) {
-        console.warn("⚠️ Initial login failed:", err.message);
-      }
-    } else {
-      console.log("✅ Already logged in (session preserved).");
-    }
-  } else {
-    console.log(
-      "ℹ️ No accounts provided — proceeding unauthenticated (may hit limited functionality).",
-    );
-  }
+  // ✅ manual auth if needed
+  await waitForLoginIfNeeded(page);
 
-  for (let i = 0; i < prompts.length; ) {
+  const results = [];
+
+  for (let i = 0; i < prompts.length; i++) {
     const prompt = prompts[i];
-    console.log(`🎯 Processing prompt ${i + 1}/${prompts.length}`);
+    console.log(`🎯 Prompt ${i + 1}/${prompts.length}`);
 
     try {
-      // If we require an authenticated session and it's missing, attempt login (and rotate if needed)
-      if (accounts.length > 0 && !(await isLoggedIn(page))) {
-        console.log("🔐 Session expired or not logged in — logging back in");
-        // try current account or rotate
-        try {
-          await loginWithPopup(
-            context,
-            page,
-            accounts[accountIndex].email,
-            accounts[accountIndex].password,
-          );
-          await sleep(3000);
-        } catch (err) {
-          console.warn("⚠️ Login attempt failed:", err.message);
-        }
-      }
-
-      /* ---------------------------------- */
-      /* ✅ Start new project (fresh UI) */
-      /* ---------------------------------- */
-      await page.click("button:has-text('New project')");
-      const textarea = "textarea[placeholder='Generate a video with text…']";
-      await page.waitForSelector(textarea, { timeout: 30000 });
-
-      /* ---------------------------------- */
-      /* ✅ Ensure Text-to-Video */
-      /* ---------------------------------- */
-      const modeLabel = await page
-        .textContent("button[role='combobox'] span")
-        .catch(() => "");
-      if (!modeLabel || !modeLabel.includes("Text to Video")) {
-        await page.click("button[role='combobox']");
-        await page.waitForSelector("div[role='listbox']", { timeout: 15000 });
-        await page.click("div[role='option']:has-text('Text to Video')");
-      }
-
-      /* ---------------------------------- */
-      /* ✅ Count videos before */
-      /* ---------------------------------- */
-      const prevVideos = await page.evaluate(
-        () => document.querySelectorAll("video").length,
+      // New project
+      await page.locator("button:has-text('New project')").click();
+      const textarea = page.locator(
+        "textarea[placeholder*='Generate a video']",
       );
+      await textarea.waitFor({ timeout: 60000 });
 
-      /* ---------------------------------- */
-      /* ✅ Type prompt */
-      /* ---------------------------------- */
-      await page.fill(textarea, "");
-      await page.type(textarea, prompt, { delay: 25 });
+      // Type prompt
+      await textarea.fill("");
+      await textarea.type(prompt, { delay: 20 });
       console.log("✅ Prompt typed");
 
-      /* ---------------------------------- */
-      /* ✅ Start generation */
-      /* ---------------------------------- */
-      // Button with arrow_forward icon used in original script
-      await page.click(
-        "button:has(i.google-symbols:has-text('arrow_forward'))",
-      );
-      console.log("🚀 Video generation started");
+      // Start generation (arrow_forward)
+      await page
+        .locator("button", {
+          has: page.locator("i.google-symbols:has-text('arrow_forward')"),
+        })
+        .first()
+        .click();
 
-      // Optionally capture video network stream (non-blocking)
-      const networkPromise = waitAndSaveVideoFromNetwork(
+      console.log("🚀 Generation started");
+
+      // Wait complete
+      const videoSrc = await waitUntilVideoCompleted(page);
+
+      const downloadedPath = await downloadVideoFromSrc(
         page,
+        videoSrc,
         DOWNLOAD_DIR,
-        120000,
+        i,
       );
-
-      /* ---------------------------------- */
-      /* ✅ Wait for NEW video or error */
-      /* ---------------------------------- */
-      await page.waitForFunction(
-        (prev) => {
-          // If an in-page alert appears, let it be handled by outside check
-          const hasAlert = Array.from(
-            document.querySelectorAll("div, p, span"),
-          ).some(
-            (n) =>
-              n.innerText &&
-              /quota|limit|exceeded|try again later/i.test(n.innerText),
-          );
-          if (hasAlert) return true;
-
-          const vCount = document.querySelectorAll("video").length;
-          return vCount > prev;
-        },
-        prevVideos,
-        { timeout: 360000 },
-      );
-
-      // After wait, check for daily/limit errors
-      if (await hasDailyLimitError(page)) {
-        console.log(
-          "🚫 Detected limit/quota error after generation attempt — switching account if available",
-        );
-
-        accountIndex++;
-        if (accountIndex >= accounts.length) {
-          throw new Error("All accounts exhausted due to quota/limit");
-        }
-
-        // Logout & login next account
-        await logout(context, page);
-        await loginWithPopup(
-          context,
-          page,
-          accounts[accountIndex].email,
-          accounts[accountIndex].password,
-        );
-        // don't increment prompt index - retry the same prompt with new account
-        await resetToHome(page);
-        continue;
-      }
-
-      // Give time for video element to be ready
-      await sleep(2000);
-
-      // Try to get the newest video element source
-      const videoUrl = await page.evaluate(() => {
-        const videos = Array.from(document.querySelectorAll("video"));
-        if (!videos.length) return null;
-        const v = videos[videos.length - 1];
-        return v ? v.currentSrc || v.src : null;
-      });
-
-      // Wait a bit to ensure download button is enabled
-      await sleep(4000);
-
-      let uiDownloadedPath = null;
-
-      // Try UI-based download FIRST (most reliable)
-      try {
-        uiDownloadedPath = await waitAndDownloadFromUI(page, DOWNLOAD_DIR, i);
-      } catch (err) {
-        console.warn(
-          "⚠️ UI download failed, falling back to network:",
-          err.message,
-        );
-      }
-
-      // Network capture fallback
-      const downloadedPath = await networkPromise.catch(() => null);
-
-      console.log("✅ Video finished for prompt:", prompt);
 
       results.push({
         index: i,
         prompt,
         status: "completed",
-        videoUrl,
-        downloadedPath: uiDownloadedPath || downloadedPath || null,
+        downloadedPath,
       });
 
-      // increment prompt index on success
-      i++;
-
-      /* ---------------------------------- */
-      /* ✅ HARD RESET BETWEEN PROMPTS */
-      /* ---------------------------------- */
-      await sleep(8000);
+      // 🔄 IMPORTANT: reset Flow UI before next prompt
+      await page.waitForTimeout(2000);
       await resetToHome(page);
     } catch (err) {
-      console.error(`❌ Prompt failed (index ${i}): ${err.message}`);
-
-      // If it's a quota/daily-limit-like error, rotate account and retry
-      const pageHasLimit = await hasDailyLimitError(page);
-      if (pageHasLimit && accounts.length > 0) {
-        console.log("🔁 Rotating account due to detected limit/quota...");
-        accountIndex++;
-        if (accountIndex >= accounts.length) {
-          // exhausted all accounts
-          results.push({
-            index: i,
-            prompt,
-            error: "All accounts exhausted due to quota/limit",
-          });
-          break;
-        }
-
-        try {
-          await logout(context, page);
-          await loginWithPopup(
-            context,
-            page,
-            accounts[accountIndex].email,
-            accounts[accountIndex].password,
-          );
-        } catch (loginErr) {
-          console.warn("⚠️ Failed to login new account:", loginErr.message);
-        }
-
-        // do not increment i, try same prompt again
-        await resetToHome(page);
-        continue;
-      }
-
-      // Non-rotate failure: record and move on
-      results.push({
-        index: i,
-        prompt,
-        error: err.message,
-      });
-
-      i++; // move to next prompt
-      await sleep(5000);
-      await resetToHome(page);
+      console.error(`❌ Failed prompt ${i}:`, err.message);
+      results.push({ index: i, prompt, status: "failed", error: err.message });
     }
   }
 
