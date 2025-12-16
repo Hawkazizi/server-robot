@@ -20,6 +20,18 @@ async function resetToHome(page) {
 }
 
 /* ---------------------------------- */
+/* ✅ filename HELPER */
+/* ---------------------------------- */
+
+function sanitizePromptForFilename(prompt, maxLength = 80) {
+  return prompt
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gi, "_") // replace unsafe chars
+    .replace(/^_+|_+$/g, "") // trim underscores
+    .slice(0, maxLength); // prevent insanely long filenames
+}
+
+/* ---------------------------------- */
 /* ✅ AUTH HELPERS (for Google sign-in) */
 /* ---------------------------------- */
 
@@ -56,7 +68,13 @@ async function waitForLoginIfNeeded(page) {
 
 /// download helper
 
-async function downloadVideoFromSrc(page, videoSrc, DOWNLOAD_DIR, index) {
+async function downloadVideoFromSrc(
+  page,
+  videoSrc,
+  DOWNLOAD_DIR,
+  index,
+  prompt,
+) {
   console.log("⬇️ Downloading video via src...");
 
   const buffer = await page.evaluate(async (url) => {
@@ -65,7 +83,9 @@ async function downloadVideoFromSrc(page, videoSrc, DOWNLOAD_DIR, index) {
     return Array.from(new Uint8Array(arrayBuffer));
   }, videoSrc);
 
-  const filePath = `${DOWNLOAD_DIR}/${index}-${Date.now()}.mp4`;
+  const safePrompt = sanitizePromptForFilename(prompt);
+  const filePath = `${DOWNLOAD_DIR}/${index}-${safePrompt}.mp4`;
+
   fs.writeFileSync(filePath, Buffer.from(buffer));
 
   console.log("✅ Video saved:", filePath);
