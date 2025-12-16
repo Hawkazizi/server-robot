@@ -20,6 +20,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /* ---------------------------------- */
 /* AUTH HELPERS */
 /* ---------------------------------- */
+async function clickInitialSignInIfPresent(page) {
+  // wait 2 seconds after first render
+  await page.waitForTimeout(2000);
+
+  const signInBtn = page.locator(
+    "div.flex.flex-row.gap-4.mt-8 button:has-text('Sign in')",
+  );
+
+  if (await signInBtn.count()) {
+    console.log("👉 Clicking initial Sign in button");
+    await signInBtn.first().click();
+    await page.waitForTimeout(800); // let modal/page transition start
+  }
+}
+
 async function safeCloseContext(context) {
   try {
     await context.close();
@@ -52,6 +67,7 @@ async function ensureLoggedIn(page, account) {
     timeout: 40000,
   });
 
+  await clickInitialSignInIfPresent(page);
   // Fast path
   if (await isLoggedIn(page)) {
     console.log("✅ Already logged in");
@@ -130,7 +146,7 @@ async function ensureImageModelSelected(page) {
 }
 
 /* ---------------------------------- */
-/* LOGIN FLOW (EXACT AS DESCRIBED) */
+/* LOGIN FLOW  */
 /* ---------------------------------- */
 async function login(page, email, password) {
   console.log(`🔐 Logging in as ${email}`);
