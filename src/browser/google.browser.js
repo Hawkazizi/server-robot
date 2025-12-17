@@ -411,6 +411,7 @@ export async function generateVideoViaGoogleFlowBatch({ prompts }) {
         videoSrc,
         DOWNLOAD_DIR,
         i,
+        prompt,
       );
 
       results.push({
