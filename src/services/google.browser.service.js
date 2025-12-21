@@ -10,6 +10,7 @@ import { generateVideoViaGoogleFlowBatch } from "../browser/google.browser.js";
 export async function generateVideoViaGoogleFlowBatchService({
   prompts,
   accounts,
+  category,
 }) {
   if (!Array.isArray(prompts) || prompts.length === 0) {
     throw new Error("prompts must be a non-empty array");
@@ -22,5 +23,6 @@ export async function generateVideoViaGoogleFlowBatchService({
   return await generateVideoViaGoogleFlowBatch({
     prompts,
     accounts,
+    category,
   });
 }

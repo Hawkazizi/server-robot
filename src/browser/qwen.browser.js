@@ -14,6 +14,33 @@ function sleep(ms) {
 }
 
 /* ---------------------------------- */
+/* ✅ directoy HELPERS */
+/* ---------------------------------- */
+
+function getCategoryDir(category) {
+  const safeCategory = category
+    ?.toLowerCase()
+    .replace(/[^a-z0-9]+/gi, "_")
+    .replace(/^_+|_+$/g, "");
+
+  if (!safeCategory) {
+    throw new Error("Invalid category name");
+  }
+
+  const dir = `${DOWNLOAD_DIR}/${safeCategory}`;
+
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`📁 Created category folder → ${dir}`);
+  }
+
+  return dir;
+}
+function random8Digit() {
+  return Math.floor(10000000 + Math.random() * 90000000);
+}
+
+/* ---------------------------------- */
 /* ✅ AUTH HELPERS */
 /* ---------------------------------- */
 
@@ -55,7 +82,7 @@ async function logout(page) {
   console.log("✅ Logged out successfully");
 }
 
-async function downloadQwenVideoFromDOM(page, prompt) {
+async function downloadQwenVideoFromDOM(page, prompt, categoryDir) {
   console.log("⬇️ Downloading video from DOM <video> tag");
 
   const videoUrl = await page.evaluate(() => {
@@ -84,7 +111,8 @@ async function downloadQwenVideoFromDOM(page, prompt) {
     .replace(/[^a-z0-9]+/gi, "_")
     .slice(0, 60);
 
-  const filePath = `${DOWNLOAD_DIR}/${safePrompt}.mp4`;
+  const rand = random8Digit();
+  const filePath = `${categoryDir}/${rand}-${safePrompt}.mp4`;
   fs.writeFileSync(filePath, buffer);
 
   console.log(`💾 Saved video → ${filePath}`);
@@ -113,7 +141,7 @@ async function hasDailyLimitError(page) {
 }
 
 /* ---------------------------------- */
-/* ✅ VIDEO MODE */
+/* ✅ VIDEO MODE AND SIZE  */
 /* ---------------------------------- */
 
 async function ensureVideoMode(page) {
@@ -147,6 +175,99 @@ async function ensureVideoMode(page) {
   } else {
     // IMPORTANT: do NOT fail — Qwen often keeps last mode active
     console.log("⚠️ Video button not present — assuming mode already active");
+  }
+}
+async function ensureVideoSizeRatio(page, ratio = "9:16") {
+  console.log(`📐 Ensuring video ratio: ${ratio}`);
+
+  // Wait for size selector to exist (it appears near the chat input action bar)
+  const sizeBtn = page
+    .locator(".chat-input-feature-btn.size-selector-btn")
+    .first();
+  await sizeBtn.waitFor({ state: "visible", timeout: 60000 });
+
+  // If already set (button shows current ratio), do nothing
+  const already = await page.evaluate((desired) => {
+    const btn = document.querySelector(
+      ".chat-input-feature-btn.size-selector-btn",
+    );
+    if (!btn) return false;
+    const txt = btn.innerText?.replace(/\s+/g, "").trim();
+    return txt?.includes(desired.replace(/\s+/g, ""));
+  }, ratio);
+
+  if (already) {
+    console.log(`✅ Ratio already set to ${ratio}`);
+    return;
+  }
+
+  // Open dropdown
+  await sizeBtn.click();
+  await page.waitForTimeout(300);
+
+  // Click the dropdown item by its title text (most stable)
+  const clicked = await page.evaluate((desired) => {
+    const menu = document.querySelector("ul.ant-dropdown-menu[role='menu']");
+    if (!menu) return false;
+
+    const items = Array.from(
+      menu.querySelectorAll("li.ant-dropdown-menu-item"),
+    );
+    const target = items.find((li) => {
+      const t = li
+        .querySelector(".ant-dropdown-menu-title-content")
+        ?.textContent?.trim();
+      return t === desired;
+    });
+
+    if (!target) return false;
+
+    target.click();
+    return true;
+  }, ratio);
+
+  if (!clicked) {
+    // Fallback: sometimes menu is rendered elsewhere; search globally
+    const clickedFallback = await page.evaluate((desired) => {
+      const items = Array.from(
+        document.querySelectorAll("li.ant-dropdown-menu-item"),
+      );
+      const target = items.find((li) => {
+        const t = li
+          .querySelector(".ant-dropdown-menu-title-content")
+          ?.textContent?.trim();
+        return t === desired;
+      });
+      if (!target) return false;
+      target.click();
+      return true;
+    }, ratio);
+
+    if (!clickedFallback) {
+      console.log(`⚠️ Could not find ratio option: ${ratio}`);
+      return;
+    }
+  }
+
+  // Small settle time for UI to update
+  await page.waitForTimeout(400);
+
+  // Verify it changed (soft check)
+  const ok = await page.evaluate((desired) => {
+    const btn = document.querySelector(
+      ".chat-input-feature-btn.size-selector-btn",
+    );
+    if (!btn) return false;
+    const txt = btn.innerText?.replace(/\s+/g, "").trim();
+    return txt?.includes(desired.replace(/\s+/g, ""));
+  }, ratio);
+
+  if (ok) {
+    console.log(`✅ Ratio set to ${ratio}`);
+  } else {
+    console.log(
+      `⚠️ Ratio click done, but UI didn't confirm (continuing anyway)`,
+    );
   }
 }
 
@@ -269,7 +390,15 @@ async function clickLastVideoMenuAndDownload(page) {
 /* ✅ MAIN BATCH FUNCTION */
 /* ---------------------------------- */
 
-export async function generateVideoViaQwenBrowserBatch({ prompts, accounts }) {
+export async function generateVideoViaQwenBrowserBatch({
+  prompts,
+  accounts,
+  category,
+}) {
+  if (!category || typeof category !== "string") {
+    throw new Error("category is required");
+  }
+
   if (!Array.isArray(prompts) || prompts.length === 0) {
     throw new Error("prompts must be a non-empty array");
   }
@@ -307,7 +436,7 @@ export async function generateVideoViaQwenBrowserBatch({ prompts, accounts }) {
   await page.waitForSelector("textarea", { timeout: 0 });
   await page.waitForSelector(".chat-prompt-suggest-button", { timeout: 0 });
   await ensureVideoMode(page);
-
+  await ensureVideoSizeRatio(page, "9:16");
   for (let i = 0; i < prompts.length; ) {
     console.log(`🎯 Processing ${i + 1}/${prompts.length}`);
 
@@ -368,10 +497,12 @@ export async function generateVideoViaQwenBrowserBatch({ prompts, accounts }) {
       await ensureVideoMode(page);
       continue;
     }
+    const categoryDir = getCategoryDir(category);
 
     const { filePath, videoUrl } = await downloadQwenVideoFromDOM(
       page,
       prompts[i],
+      categoryDir,
     );
 
     results.push({

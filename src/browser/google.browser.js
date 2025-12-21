@@ -20,8 +20,31 @@ async function resetToHome(page) {
 }
 
 /* ---------------------------------- */
-/* ✅ filename HELPER */
+/* ✅ directory HELPER */
 /* ---------------------------------- */
+
+function getCategoryDir(baseDir, category) {
+  const safeCategory = category
+    ?.toLowerCase()
+    .replace(/[^a-z0-9]+/gi, "_")
+    .replace(/^_+|_+$/g, "");
+
+  if (!safeCategory) {
+    throw new Error("Invalid category name");
+  }
+
+  const dir = `${baseDir}/${safeCategory}`;
+
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`📁 Created Flow category folder → ${dir}`);
+  }
+
+  return dir;
+}
+function random8Digit() {
+  return Math.floor(10000000 + Math.random() * 90000000);
+}
 
 function sanitizePromptForFilename(prompt, maxLength = 80) {
   return prompt
@@ -84,7 +107,8 @@ async function downloadVideoFromSrc(
   }, videoSrc);
 
   const safePrompt = sanitizePromptForFilename(prompt);
-  const filePath = `${DOWNLOAD_DIR}/${index}-${safePrompt}.mp4`;
+  const rand = random8Digit();
+  const filePath = `${DOWNLOAD_DIR}/${rand}-${safePrompt}.mp4`;
 
   fs.writeFileSync(filePath, Buffer.from(buffer));
 
@@ -352,10 +376,16 @@ async function waitAndSaveVideoFromNetwork(
 /* ---------------------------------- */
 /* ✅ MAIN BATCH FUNCTION (updated) */
 /* ---------------------------------- */
-export async function generateVideoViaGoogleFlowBatch({ prompts }) {
-  const DOWNLOAD_DIR = "/home/hawk/flow-videos";
-  if (!fs.existsSync(DOWNLOAD_DIR))
-    fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+export async function generateVideoViaGoogleFlowBatch({ prompts, category }) {
+  if (!category) {
+    throw new Error("category is required");
+  }
+  const BASE_DOWNLOAD_DIR = "/home/hawk/flow-videos";
+  if (!fs.existsSync(BASE_DOWNLOAD_DIR)) {
+    fs.mkdirSync(BASE_DOWNLOAD_DIR, { recursive: true });
+  }
+
+  const DOWNLOAD_DIR = getCategoryDir(BASE_DOWNLOAD_DIR, category);
 
   const context = await chromium.launchPersistentContext(USER_DATA_DIR_FLOW, {
     headless: false,

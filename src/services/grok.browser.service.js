@@ -1,6 +1,10 @@
 import { generateGrokImagineVideos } from "../browser/grok.browser.js";
 
-export async function generateGrokImagineVideosService({ prompts, accounts }) {
+export async function generateGrokImagineVideosService({
+  prompts,
+  accounts,
+  category,
+}) {
   if (!Array.isArray(prompts)) prompts = [prompts];
 
   if (prompts.length > accounts.length) {
@@ -22,7 +26,11 @@ export async function generateGrokImagineVideosService({ prompts, accounts }) {
         console.log(
           `🔄 Using account: ${account.email} for prompt: "${prompt}"`,
         );
-        const result = await generateGrokImagineVideos({ prompt, account });
+        const result = await generateGrokImagineVideos({
+          prompt,
+          account,
+          category,
+        });
         results.push(result);
         break; // success → move to next
       } catch (error) {

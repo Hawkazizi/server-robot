@@ -6,23 +6,49 @@ import fs from "fs";
 /* ---------------------------------- */
 
 const USER_DATA_DIR = "/home/hawk/.chrome-automation-grok-imagine";
-const DOWNLOAD_DIR = "/home/hawk/grok-imagine-videos";
-
+const BASE_DOWNLOAD_DIR = "/home/hawk/grok-imagine-videos";
 const GROK_HOME_URL = "https://grok.com";
 const GROK_IMAGINE_URL = "https://grok.com/imagine";
 
-if (!fs.existsSync(DOWNLOAD_DIR)) {
-  fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+if (!fs.existsSync(BASE_DOWNLOAD_DIR)) {
+  fs.mkdirSync(BASE_DOWNLOAD_DIR, { recursive: true });
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ---------------------------------- */
+/* DIRECROY HELPERS */
+/* ---------------------------------- */
+
+function getCategoryDir(baseDir, category) {
+  const safeCategory = category
+    ?.toLowerCase()
+    .replace(/[^a-z0-9]+/gi, "_")
+    .replace(/^_+|_+$/g, "");
+
+  if (!safeCategory) {
+    throw new Error("Invalid category name");
+  }
+
+  const dir = `${baseDir}/${safeCategory}`;
+
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`📁 Created Grok category folder → ${dir}`);
+  }
+
+  return dir;
+}
+function random8Digit() {
+  return Math.floor(10000000 + Math.random() * 90000000);
+}
 
 /* ---------------------------------- */
 /* AUTH HELPERS */
 /* ---------------------------------- */
 async function clickInitialSignInIfPresent(page) {
   // wait 2 seconds after first render
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(3000);
 
   const signInBtn = page.locator(
     "div.flex.flex-row.gap-4.mt-8 button:has-text('Sign in')",
@@ -355,7 +381,8 @@ async function captureAllVideos(page, expectedCount, prompt, timeout = 120000) {
         if (buffer.length < 500_000) return;
 
         const safePrompt = sanitizePrompt(prompt);
-        const filePath = `${DOWNLOAD_DIR}/${safePrompt}-${collected.size + 1}.mp4`;
+        const rand = random8Digit();
+        const filePath = `${DOWNLOAD_DIR}/${rand}-${safePrompt}.mp4`;
 
         fs.writeFileSync(filePath, buffer);
 
@@ -412,11 +439,17 @@ async function logout(page) {
 export async function generateGrokImagineVideos({
   prompt,
   account,
+  category,
   imageCount = 36,
 }) {
   if (!prompt || typeof prompt !== "string") {
     throw new Error("Prompt must be a non-empty string");
   }
+  if (!category) {
+    throw new Error("category is required");
+  }
+  const DOWNLOAD_DIR = getCategoryDir(BASE_DOWNLOAD_DIR, category);
+
   const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
     headless: false,
     executablePath: "/usr/bin/google-chrome-stable",
@@ -459,6 +492,14 @@ export async function generateGrokImagineVideos({
 
   /* DOWNLOAD */
   const videos = await captureAllVideos(page, imageCount, prompt);
+
+  if (videos.length < imageCount) {
+    console.log(
+      `⚠️ Partial generation (${videos.length}/${imageCount}) — forcing logout`,
+    );
+    await logout(page);
+    await page.waitForTimeout(8000);
+  }
 
   await safeCloseContext(page.context());
 

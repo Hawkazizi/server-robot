@@ -18,7 +18,13 @@ router.post("/generate", async (req, res) => {
 
 router.post("/generate-qwen-batch", async (req, res) => {
   try {
-    const { prompts, accounts } = req.body;
+    const { prompts, accounts, category } = req.body;
+
+    if (!category) {
+      return res.status(400).json({
+        error: "category is required",
+      });
+    }
 
     if (!Array.isArray(prompts) || prompts.length === 0) {
       return res.status(400).json({
@@ -35,6 +41,7 @@ router.post("/generate-qwen-batch", async (req, res) => {
     const results = await generateVideoViaQwenBrowserBatchService({
       prompts,
       accounts,
+      category,
     });
 
     res.json({
@@ -54,7 +61,12 @@ router.post("/generate-qwen-batch", async (req, res) => {
 
 router.post("/generate-google-flow-batch", async (req, res) => {
   try {
-    const { prompts, accounts } = req.body;
+    const { prompts, accounts, category } = req.body;
+    if (!category) {
+      return res.status(400).json({
+        error: "category is required",
+      });
+    }
 
     if (!Array.isArray(prompts) || prompts.length === 0) {
       return res.status(400).json({
@@ -71,6 +83,7 @@ router.post("/generate-google-flow-batch", async (req, res) => {
     const results = await generateVideoViaGoogleFlowBatchService({
       prompts,
       accounts,
+      category,
     });
 
     res.json({
@@ -86,7 +99,13 @@ router.post("/generate-google-flow-batch", async (req, res) => {
 
 router.post("/generate-grok-imagine-batch", async (req, res) => {
   try {
-    const { prompts, accounts } = req.body;
+    const { prompts, accounts, category } = req.body;
+
+    if (!category) {
+      return res.status(400).json({
+        error: "category is required",
+      });
+    }
 
     if (!Array.isArray(prompts) || prompts.length === 0) {
       return res
@@ -103,6 +122,7 @@ router.post("/generate-grok-imagine-batch", async (req, res) => {
     const result = await generateGrokImagineVideosService({
       prompts,
       accounts,
+      category,
     });
 
     res.json({
