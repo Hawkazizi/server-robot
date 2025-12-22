@@ -339,7 +339,13 @@ function sanitizePrompt(prompt, maxLength = 60) {
     .replace(/^_+|_+$/g, "") // trim underscores
     .slice(0, maxLength); // limit length
 }
-async function captureAllVideos(page, expectedCount, prompt, timeout = 120000) {
+async function captureAllVideos(
+  page,
+  expectedCount,
+  prompt,
+  downloadDir,
+  timeout = 120000,
+) {
   console.log("⬇️ Capturing generated videos");
 
   const collected = new Set();
@@ -379,10 +385,9 @@ async function captureAllVideos(page, expectedCount, prompt, timeout = 120000) {
 
         const buffer = await response.body();
         if (buffer.length < 500_000) return;
-
         const safePrompt = sanitizePrompt(prompt);
         const rand = random8Digit();
-        const filePath = `${DOWNLOAD_DIR}/${rand}-${safePrompt}.mp4`;
+        const filePath = `${downloadDir}/${rand}-${safePrompt}.mp4`;
 
         fs.writeFileSync(filePath, buffer);
 
@@ -491,7 +496,7 @@ export async function generateGrokImagineVideos({
   await clickMakeVideoOnAllImages(page);
 
   /* DOWNLOAD */
-  const videos = await captureAllVideos(page, imageCount, prompt);
+  const videos = await captureAllVideos(page, imageCount, prompt, DOWNLOAD_DIR);
 
   if (videos.length < imageCount) {
     console.log(
